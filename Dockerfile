@@ -8,7 +8,7 @@ COPY src ./src
 RUN mvn clean package -DskipTests
 
 # 第二阶段：运行环境 (负责运行)
-FROM openjdk:17-jdk-alpine
+FROM eclipse-temurin:17-jdk-alpine
 WORKDIR /app
 # 从第一阶段把打好的 jar 包复制过来
 # 注意：这里的 *.jar 会自动匹配 target 目录下生成的那个文件
