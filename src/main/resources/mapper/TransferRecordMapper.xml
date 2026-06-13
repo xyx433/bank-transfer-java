@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    转账交易流水 Mapper XML 映射文件
+
+    【金融安全设计要点】
+    1. 幂等性查询：根据 idempotencyKey 查询
+    2. 插入流水：idempotencyKey 有唯一索引约束
+    3. 状态更新：使用乐观锁防止并发修改
+    4. 日切统计：按自然日统计累计金额
+-->
+<mapper namespace="com.bank.core.banktransferservice.mapper.TransferRecordMapper">
+
+    <!-- 结果映射 -->
+    <resultMap id="BaseResultMap" type="com.bank.core.banktransferservice.entity.TransferRecord">
+        <id column="id" property="id"/>
+        <result column="tran_seq_no" property="tranSeqNo"/>
+        <result column="idempotency_key" property="idempotencyKey"/>
+        <result column="channel_id" property="channelId"/>
+
+        <!-- 付款人信息 -->
+        <result column="payer_acct_no" property="payerAcctNo"/>
+        <result column="payer_acct_name" property="payerAcctName"/>
+        <result column="payer_id_type" property="payerIdType"/>
+        <result column="payer_id_no" property="payerIdNo"/>
+        <result column="payer_bank_code" property="payerBankCode"/>
+        <result column="payer_bank_name" property="payerBankName"/>
+
+        <!-- 收款人信息 -->
+        <result column="payee_acct_no" property="payeeAcctNo"/>
+        <result column="payee_acct_name" property="payeeAcctName"/>
+        <result column="payee_bank_code" property="payeeBankCode"/>
+        <result column="payee_bank_name" property="payeeBankName"/>
+        <result column="payee_bank_union_code" property="payeeBankUnionCode"/>
+
+        <!-- 交易信息 -->
+        <result column="amount" property="amount"/>
+        <result column="currency_code" property="currencyCode"/>
+        <result column="biz_type" property="bizType"/>
+        <result column="purpose_code" property="purposeCode"/>
+        <result column="remit_info" property="remitInfo"/>
+        <result column="route_mode" property="routeMode"/>
+        <result column="fee_bearer" property="feeBearer"/>
+        <result column="fee_amount" property="feeAmount"/>
+
+        <!-- 清算信息 -->
+        <result column="acp_tran_seq_no" property="acpTranSeqNo"/>
+        <result column="core_serial_no" property="coreSerialNo"/>
+        <result column="host_seq_no" property="hostSeqNo"/>
+        <result column="host_status" property="hostStatus"/>
+
+        <!-- 安全信息 -->
+        <result column="sms_code" property="smsCode"/>
+        <result column="device_fingerprint" property="deviceFingerprint"/>
+        <result column="client_ip" property="clientIp"/>
+        <result column="gps_longitude" property="gpsLongitude"/>
+        <result column="gps_latitude" property="gpsLatitude"/>
+
+        <!-- 交易状态 -->
+        <result column="tran_status" property="tranStatus"/>
+        <result column="resp_code" property="respCode"/>
+        <result column="resp_msg" property="respMsg"/>
+        <result column="fail_reason_code" property="failReasonCode"/>
+        <result column="fail_reason_desc" property="failReasonDesc"/>
+
+        <!-- 时间戳 -->
+        <result column="tran_timestamp" property="tranTimestamp"/>
+        <result column="completed_time" property="completedTime"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <!-- 基础列 -->
+    <sql id="Base_Column_List">
+        id, tran_seq_no, idempotency_key, channel_id,
+        payer_acct_no, payer_acct_name, payer_id_type, payer_id_no, payer_bank_code, payer_bank_name,
+        payee_acct_no, payee_acct_name, payee_bank_code, payee_bank_name, payee_bank_union_code,
+        amount, currency_code, biz_type, purpose_code, remit_info, route_mode, fee_bearer, fee_amount,
+        acp_tran_seq_no, core_serial_no, host_seq_no, host_status,
+        sms_code, device_fingerprint, client_ip, gps_longitude, gps_latitude,
+        tran_status, resp_code, resp_msg, fail_reason_code, fail_reason_desc,
+        tran_timestamp, completed_time, create_time, update_time
+    </sql>
+
+    <!--
+        根据幂等号查询交易记录
+
+        【幂等性核心】
+        在插入流水前，先根据 idempotencyKey 查询是否已存在：
+        - 存在且已成功：返回原交易结果，不重新扣款
+        - 存在但处理中：返回处理中状态
+        - 存在但失败：允许重新发起（使用新的幂等号）
+        - 不存在：继续处理
+
+        这是防止重复扣款的第一道防线
+    -->
+    <select id="selectByIdempotencyKey" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM transfer_record
+        WHERE idempotency_key = #{idempotencyKey}
+    </select>
+
+    <!-- 根据交易流水号查询 -->
+    <select id="selectByTranSeqNo" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM transfer_record
+        WHERE tran_seq_no = #{tranSeqNo}
+    </select>
+
+    <!-- 根据主键查询 -->
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM transfer_record
+        WHERE id = #{id}
+    </select>
+
+    <!--
+        插入交易流水
+
+        【插入流水核心逻辑】
+        - idempotencyKey 字段有唯一索引约束
+        - 如果重复插入相同幂等号，会抛出 DuplicateKeyException
+        - 这是防止重复扣款的第二道防线（数据库层面）
+
+        插入时机：
+        - 在扣款前插入流水（状态为 INIT 或 PROCESSING）
+        - 扣款成功后更新状态为 SUCCESS
+        - 扣款失败后更新状态为 FAILED
+    -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO transfer_record (
+            tran_seq_no, idempotency_key, channel_id,
+            payer_acct_no, payer_acct_name, payer_id_type, payer_id_no, payer_bank_code, payer_bank_name,
+            payee_acct_no, payee_acct_name, payee_bank_code, payee_bank_name, payee_bank_union_code,
+            amount, currency_code, biz_type, purpose_code, remit_info, route_mode, fee_bearer, fee_amount,
+            sms_code, device_fingerprint, client_ip, gps_longitude, gps_latitude,
+            tran_status, resp_code, resp_msg,
+            tran_timestamp
+        ) VALUES (
+            #{tranSeqNo}, #{idempotencyKey}, #{channelId},
+            #{payerAcctNo}, #{payerAcctName}, #{payerIdType}, #{payerIdNo}, #{payerBankCode}, #{payerBankName},
+            #{payeeAcctNo}, #{payeeAcctName}, #{payeeBankCode}, #{payeeBankName}, #{payeeBankUnionCode},
+            #{amount}, #{currencyCode}, #{bizType}, #{purposeCode}, #{remitInfo}, #{routeMode}, #{feeBearer}, #{feeAmount},
+            #{smsCode}, #{deviceFingerprint}, #{clientIp}, #{gpsLongitude}, #{gpsLatitude},
+            #{tranStatus}, #{respCode}, #{respMsg},
+            #{tranTimestamp}
+        )
+    </insert>
+
+    <!-- 更新交易状态 -->
+    <update id="updateStatus">
+        UPDATE transfer_record
+        SET tran_status = #{tranStatus},
+            resp_code = #{respCode},
+            resp_msg = #{respMsg},
+            completed_time = #{completedTime},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <!-- 更新交易状态（带失败原因） -->
+    <update id="updateStatusWithFailReason">
+        UPDATE transfer_record
+        SET tran_status = #{tranStatus},
+            resp_code = #{respCode},
+            resp_msg = #{respMsg},
+            fail_reason_code = #{failReasonCode},
+            fail_reason_desc = #{failReasonDesc},
+            completed_time = #{completedTime},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <!-- 更新清算信息 -->
+    <update id="updateHostInfo">
+        UPDATE transfer_record
+        SET acp_tran_seq_no = #{acpTranSeqNo},
+            core_serial_no = #{coreSerialNo},
+            host_seq_no = #{hostSeqNo},
+            host_status = #{hostStatus},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <!--
+        查询账户当日累计转账金额
+
+        【日切限额统计】
+        用于校验单日累计限额：
+        - 统计当日已成功的转账金额
+        - 排除已冲正/已撤销的交易（只统计 SUCCESS）
+        - 按渠道分别统计
+
+        注意：
+        - 使用 DATE(create_time) 进行日切统计
+        - 只统计成功的交易（tran_status = 'SUCCESS')
+    -->
+    <select id="sumDailyAmountByAcctNo" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(amount), 0)
+        FROM transfer_record
+        WHERE payer_acct_no = #{payerAcctNo}
+          AND channel_id = #{channelId}
+          AND DATE(create_time) = #{statDate}
+          AND tran_status = 'SUCCESS'
+    </select>
+
+    <!-- 查询账户当日转账笔数 -->
+    <select id="countDailyByAcctNo" resultType="int">
+        SELECT COUNT(*)
+        FROM transfer_record
+        WHERE payer_acct_no = #{payerAcctNo}
+          AND channel_id = #{channelId}
+          AND DATE(create_time) = #{statDate}
+          AND tran_status = 'SUCCESS'
+    </select>
+
+    <!-- 查询账户交易记录列表 -->
+    <select id="selectByAcctNoAndTimeRange" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM transfer_record
+        WHERE (payer_acct_no = #{acctNo} OR payee_acct_no = #{acctNo})
+          AND create_time BETWEEN #{startTime} AND #{endTime}
+        ORDER BY create_time DESC
+    </select>
+
+    <!--
+        查询处理中的交易记录
+
+        【超时交易处理】
+        用于查询超时未完成的交易：
+        - 状态为 PROCESSING
+        - 超过一定时间未完成
+        - 需要主动查询人行状态或冲正
+    -->
+    <select id="selectProcessingRecords" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM transfer_record
+        WHERE tran_status = 'PROCESSING'
+          AND create_time <![CDATA[ < ]]> DATE_SUB(NOW(), INTERVAL #{timeoutMinutes} MINUTE)
+    </select>
+
+</mapper>

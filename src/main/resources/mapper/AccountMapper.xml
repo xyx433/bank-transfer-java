@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    账户 Mapper XML 映射文件
+
+    【金融安全设计要点】
+    1. 余额扣减 SQL 必须包含余额校验条件（balance >= amount）
+    2. 使用预编译参数（#{param}），防止 SQL 注入
+    3. 悲观锁查询使用 SELECT FOR UPDATE
+    4. 乐观锁更新使用版本号校验
+-->
+<mapper namespace="com.bank.core.banktransferservice.mapper.AccountMapper">
+
+    <!-- 结果映射 -->
+    <resultMap id="BaseResultMap" type="com.bank.core.banktransferservice.entity.Account">
+        <id column="id" property="id"/>
+        <result column="acct_no" property="acctNo"/>
+        <result column="acct_name" property="acctName"/>
+        <result column="id_type" property="idType"/>
+        <result column="id_no" property="idNo"/>
+        <result column="bank_code" property="bankCode"/>
+        <result column="bank_name" property="bankName"/>
+        <result column="currency_code" property="currencyCode"/>
+        <result column="balance" property="balance"/>
+        <result column="frozen_amount" property="frozenAmount"/>
+        <result column="in_transit_amount" property="inTransitAmount"/>
+        <result column="account_status" property="accountStatus"/>
+        <result column="star_level" property="starLevel"/>
+        <result column="daily_limit" property="dailyLimit"/>
+        <result column="single_limit" property="singleLimit"/>
+        <result column="mobile_phone" property="mobilePhone"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+        <result column="version" property="version"/>
+    </resultMap>
+
+    <!-- 基础列 -->
+    <sql id="Base_Column_List">
+        id, acct_no, acct_name, id_type, id_no, bank_code, bank_name, currency_code,
+        balance, frozen_amount, in_transit_amount, account_status, star_level,
+        daily_limit, single_limit, mobile_phone, create_time, update_time, version
+    </sql>
+
+    <!-- 根据账号查询账户 -->
+    <select id="selectByAcctNo" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM account
+        WHERE acct_no = #{acctNo}
+    </select>
+
+    <!--
+        根据账号查询账户（带悲观锁）
+
+        【并发控制核心】
+        SELECT FOR UPDATE 获取行级锁：
+        - 在事务中执行，锁定账户行
+        - 其他事务必须等待锁释放
+        - 防止并发扣款导致的余额不一致
+
+        使用场景：
+        1. 转账扣款前锁定付款账户
+        2. 冻结/解冻操作前锁定账户
+        3. 余额临界点并发测试场景
+
+        注意：
+        - 必须在事务中使用
+        - 锁会在事务提交/回滚后释放
+        - 避免长事务，防止锁等待超时
+    -->
+    <select id="selectByAcctNoForUpdate" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM account
+        WHERE acct_no = #{acctNo}
+        FOR UPDATE
+    </select>
+
+    <!--
+        扣减账户余额（乐观锁方式）
+
+        【乐观锁扣减核心逻辑】
+        UPDATE account
+        SET balance = balance - #{amount},
+            version = version + 1,
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+          AND balance >= #{amount}
+          AND version = #{version}
+
+        关键点：
+        1. balance >= #{amount}：余额校验，防止超卖
+        2. version = #{version}：版本号校验，防止并发修改
+        3. version = version + 1：版本号递增
+
+        如果影响行数为 0，说明：
+        - 余额不足
+        - 数据已被其他事务修改
+
+        这是防止"余额临界点并发击穿"的关键措施
+    -->
+    <update id="deductBalanceWithOptimisticLock">
+        UPDATE account
+        SET balance = balance - #{amount},
+            version = version + 1,
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+          AND balance >= #{amount}
+          AND version = #{version}
+    </update>
+
+    <!--
+        扣减账户余额（悲观锁方式）
+
+        【悲观锁扣减】
+        配合 selectByAcctNoForUpdate 使用：
+        1. 先 SELECT FOR UPDATE 锁定账户行
+        2. 校验余额充足
+        3. 执行扣减
+        4. 事务提交释放锁
+
+        关键点：
+        - balance >= #{amount}：余额校验，防止超卖
+        - 无需版本号校验（已通过行锁保证）
+    -->
+    <update id="deductBalance">
+        UPDATE account
+        SET balance = balance - #{amount},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+          AND balance >= #{amount}
+    </update>
+
+    <!-- 增加账户余额（收款入账） -->
+    <update id="addBalance">
+        UPDATE account
+        SET balance = balance + #{amount},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+    </update>
+
+    <!-- 更新账户状态 -->
+    <update id="updateStatus">
+        UPDATE account
+        SET account_status = #{status},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+    </update>
+
+    <!-- 增加冻结金额 -->
+    <update id="addFrozenAmount">
+        UPDATE account
+        SET frozen_amount = frozen_amount + #{amount},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+    </update>
+
+    <!-- 减少冻结金额 -->
+    <update id="reduceFrozenAmount">
+        UPDATE account
+        SET frozen_amount = frozen_amount - #{amount},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+          AND frozen_amount >= #{amount}
+    </update>
+
+    <!-- 增加在途资金 -->
+    <update id="addInTransitAmount">
+        UPDATE account
+        SET in_transit_amount = in_transit_amount + #{amount},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+    </update>
+
+    <!-- 减少在途资金 -->
+    <update id="reduceInTransitAmount">
+        UPDATE account
+        SET in_transit_amount = in_transit_amount - #{amount},
+            update_time = NOW()
+        WHERE acct_no = #{acctNo}
+          AND in_transit_amount >= #{amount}
+    </update>
+
+</mapper>
