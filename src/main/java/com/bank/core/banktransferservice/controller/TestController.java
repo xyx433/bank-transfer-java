@@ -60,19 +60,28 @@ public class TestController {
     @PostMapping("/transfer")
     @Transactional(rollbackFor = Exception.class)
     public Result<TransferResponse> testTransfer(@RequestBody SimpleTransferRequest request) {
+        // 【调试日志】确认请求到达Controller
+        log.info("========== 【TestController】收到测试转账请求 ==========");
+        log.info("请求体：payerAcctNo={}, payeeAcctNo={}, amount={}", 
+                request.getPayerAcctNo(), request.getPayeeAcctNo(), request.getAmount());
+        
         // 检查是否启用测试模式
         if (!appProperties.getTestMode().isEnabled()) {
+            log.warn("测试模式未启用");
             return Result.fail("TEST_MODE_DISABLED", "测试模式未启用，请在 application.yml 中设置 app.test-mode.enabled = true");
         }
 
         // 手动校验核心字段（测试模式下简化校验）
         if (request.getPayerAcctNo() == null || request.getPayerAcctNo().isEmpty()) {
+            log.warn("付款账号为空");
             return Result.fail("PARAM_INVALID", "付款账号不能为空");
         }
         if (request.getPayeeAcctNo() == null || request.getPayeeAcctNo().isEmpty()) {
+            log.warn("收款账号为空");
             return Result.fail("PARAM_INVALID", "收款账号不能为空");
         }
         if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("转账金额无效：{}", request.getAmount());
             return Result.fail("PARAM_INVALID", "转账金额必须大于0");
         }
 

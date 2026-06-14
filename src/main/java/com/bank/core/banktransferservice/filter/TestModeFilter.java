@@ -38,18 +38,23 @@ public class TestModeFilter implements Filter {
             throws IOException, ServletException {
         HttpServletRequest httpRequest = (HttpServletRequest) request;
         String requestUri = httpRequest.getRequestURI();
+        String method = httpRequest.getMethod();
+        
+        log.info("【TestModeFilter】收到请求：{} {}，测试模式：{}", method, requestUri, appProperties.getTestMode().isEnabled());
 
         // 如果测试模式启用，并且是测试接口，跳过校验
         if (appProperties.getTestMode().isEnabled() && requestUri.startsWith("/api/test")) {
-            log.info("【测试模式】放行测试接口：{}", requestUri);
+            log.info("【测试模式】放行测试接口：{} {}", method, requestUri);
 
             // 包装请求，确保请求体可以被重复读取
             HttpServletRequest wrappedRequest = new MultiReadHttpServletRequest(httpRequest);
             chain.doFilter(wrappedRequest, response);
+            log.info("【测试模式】请求处理完成：{} {}", method, requestUri);
             return;
         }
 
         // 非测试接口，正常处理
+        log.info("【TestModeFilter】非测试接口，继续处理：{} {}", method, requestUri);
         chain.doFilter(request, response);
     }
 

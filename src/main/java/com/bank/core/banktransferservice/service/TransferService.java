@@ -57,7 +57,7 @@ public class TransferService {
 
     private final AccountMapper accountMapper;
     private final TransferRecordMapper transferRecordMapper;
-    private final AppProperties appProperties;
+    //private final AppProperties appProperties;
 
     /**
      * 执行转账
