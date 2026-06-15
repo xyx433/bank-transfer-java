@@ -21,7 +21,7 @@ spring:
     # GitHub Actions 运行时会自动注入真实的 DB_HOST 和 DB_PASS
     url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:bank_core}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true&useServerPrepStmts=true&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048
     username: ${DB_USER:root}
-    password: ${DB_PASS:518089}  # ⚠️ 这里的 123456 只是给本地开发用的假密码，不会上传真实密码
+    password: ${DB_PASS:123456}  # ⚠️ 这里的 123456 只是给本地开发用的假密码，不会上传真实密码
     # HikariCP 连接池配置
     hikari:
       minimum-idle: 10
@@ -37,7 +37,7 @@ spring:
   # =====================================================
   sql:
     init:
-      mode: never             # 始终执行初始化 (开发/测试环境用 always)
+      mode: always             # 始终执行初始化 (开发/测试环境用 always)
       schema-locations: classpath:db/schema.sql   # 指向你的建表脚本
       data-locations: classpath:db/data.sql       # 指向你的初始数据脚本
       continue-on-error: false  # 遇到错误立即停止，方便排查
